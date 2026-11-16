@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOLSTICE — a sunlit hill-town tactical FPS</title>
+<!--
+  SOLSTICE — a round-based tactical FPS in a sunlit Mediterranean hill town.
+  Embers (attackers, rust) vs Sentinels (defenders, teal), 5v5 with bots.
+  Plant the charge at Depot (A) or Terrace (B), or eliminate the other team.
+  Money each round buys weapons, armor and grenades. Bots carry their own
+  wallets, follow A* routes, hold angles, hear gunfire and retake sites.
+  W A S D move · mouse look · click fire · R reload · E plant/defuse ·
+  G cook frag (release to throw) · F flash · B shop (buy phase) · Tab scoreboard.
+-->
+<style>
+  :root {
+    --ink: #f4efe4; --muted: #c9c2ae; --panel: rgba(24, 28, 26, 0.78);
+    --line: rgba(244, 239, 228, 0.25); --accent: #e8b13c;
+    --atk: #e0533a; --def: #2fb3a8;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-readout: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #9fd4ee; color: var(--ink); font-family: var(--font-ui); }
+  #game, #game canvas { position: fixed; inset: 0; display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; }
+  #flash-overlay { position: fixed; inset: 0; background: #fff; opacity: 0; transition: opacity 120ms linear; pointer-events: none; }
+
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 22px; height: 22px; transform: translate(-50%, -50%); }
+  #crosshair i { position: absolute; background: var(--ink); opacity: .9; box-shadow: 0 0 2px rgba(0,0,0,.8); }
+  #crosshair i:nth-child(1) { left: 10px; top: 0; width: 2px; height: 7px; }
+  #crosshair i:nth-child(2) { left: 10px; bottom: 0; width: 2px; height: 7px; }
+  #crosshair i:nth-child(3) { top: 10px; left: 0; height: 2px; width: 7px; }
+  #crosshair i:nth-child(4) { top: 10px; right: 0; height: 2px; width: 7px; }
+  #hitmarker { position: fixed; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%, -50%) rotate(45deg); opacity: 0; }
+  #hitmarker.on { opacity: 1; }
+  #hitmarker i { position: absolute; background: var(--accent); }
+  #hitmarker i:nth-child(1) { left: 12px; top: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(2) { left: 12px; bottom: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(3) { top: 12px; left: 0; height: 2px; width: 8px; }
+  #hitmarker i:nth-child(4) { top: 12px; right: 0; height: 2px; width: 8px; }
+
+  #topbar { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; font-family: var(--font-readout); font-size: 15px; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+  #timer { font-size: 20px; font-weight: 600; }
+  #score-value { font-weight: 600; }
+  #pips-atk { color: var(--atk); } #pips-def { color: var(--def); }
+
+  #minimap { position: fixed; top: 14px; right: 14px; width: 168px; height: 128px; border: 1px solid var(--line); background: rgba(20,26,24,.6); border-radius: 4px; }
+  #feed { position: fixed; top: 150px; right: 14px; width: 260px; text-align: right; font-size: 13px; line-height: 1.5; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
+  #callouts { position: fixed; top: 150px; left: 14px; width: 300px; font-size: 13px; line-height: 1.5; color: #ffe9a8; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
+
+  #bottom-left { position: fixed; left: 24px; bottom: 20px; }
+  #hp { font-family: var(--font-readout); font-size: 44px; line-height: 1; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+  #hp-bar-wrap { width: 150px; height: 6px; background: rgba(0,0,0,.45); margin-top: 6px; border-radius: 3px; overflow: hidden; }
+  #hp-bar { height: 100%; width: 100%; background: #7ee2a8; }
+  #armor { font-size: 13px; color: #9fd4ee; margin-top: 4px; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
+  #bottom-right { position: fixed; right: 24px; bottom: 20px; text-align: right; }
+  #ammo { display: flex; align-items: baseline; gap: 6px; justify-content: flex-end; font-family: var(--font-readout); text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+  #ammo-mag { font-size: 52px; line-height: 1; }
+  #ammo-reserve { font-size: 16px; color: var(--muted); }
+  #weapon-name { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  #money { font-family: var(--font-readout); font-size: 16px; color: var(--accent); margin-top: 4px; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
+  #hint { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 13px; color: var(--muted); text-shadow: 0 1px 2px rgba(0,0,0,.8); white-space: nowrap; }
+
+  #progress { position: fixed; left: 50%; top: 62%; transform: translateX(-50%); width: 260px; text-align: center; }
+  #progress-label { font-size: 13px; margin-bottom: 6px; text-shadow: 0 1px 2px rgba(0,0,0,.8); }
+  #progress-track { height: 8px; background: rgba(0,0,0,.5); border-radius: 4px; overflow: hidden; }
+  #progress-bar { height: 100%; width: 0%; background: var(--accent); }
+
+  #banner { position: fixed; left: 50%; top: 26%; transform: translateX(-50%); font-size: 30px; font-weight: 700; letter-spacing: .02em; text-shadow: 0 2px 6px rgba(0,0,0,.8); white-space: nowrap; }
+
+  #buy-menu { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 340px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; pointer-events: auto; }
+  #buy-menu[hidden], #scoreboard[hidden], #progress[hidden], #banner[hidden] { display: none; }
+  #buy-menu h2 { margin: 0 0 4px; font-size: 20px; }
+  #buy-money { color: var(--accent); font-family: var(--font-readout); margin-bottom: 12px; }
+  #buy-list { display: grid; gap: 6px; }
+  #buy-list button { font: inherit; text-align: left; padding: 8px 10px; background: rgba(255,255,255,.08); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+  #buy-list button:hover { background: rgba(232,177,60,.25); }
+
+  #scoreboard { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 560px; max-width: 92vw; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; }
+  #scoreboard h2 { margin: 0 0 12px; font-size: 20px; }
+  #board-rows { width: 100%; border-collapse: collapse; font-size: 14px; }
+  #board-rows th, #board-rows td { padding: 5px 8px; text-align: right; font-family: var(--font-readout); }
+  #board-rows th:first-child, #board-rows td:first-child { text-align: left; font-family: var(--font-ui); }
+  #board-rows tr.me td { color: #ffe9a8; font-weight: 600; }
+
+  .overlay { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(20, 30, 38, 0.55); }
+  .overlay[hidden] { display: none; }
+  .panel { width: min(460px, 100%); padding: 32px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  .panel h1 { margin: 0 0 8px; font-size: 34px; letter-spacing: -0.02em; }
+  .panel h1 span { color: var(--accent); }
+  .panel p { margin: 0 0 24px; font-size: 15px; line-height: 1.5; color: var(--muted); }
+  #play { font: inherit; font-weight: 600; padding: 12px 18px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #241a08; cursor: pointer; }
+  #play:hover { background: var(--ink); border-color: var(--ink); }
+  .keys { margin: 24px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+  .keys kbd { padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; font-family: var(--font-readout); font-size: 12px; color: var(--ink); }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="flash-overlay"></div>
+
+<div id="hud" aria-hidden="true">
+  <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+  <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+  <div id="topbar"><span id="pips-atk"></span><span id="timer">1:40</span><span id="score-value">EMB 0 — 0 SEN</span><span id="pips-def"></span></div>
+  <canvas id="minimap" width="168" height="128"></canvas>
+  <div id="feed"></div>
+  <div id="callouts"></div>
+  <div id="bottom-left"><div id="hp">100</div><div id="hp-bar-wrap"><div id="hp-bar"></div></div><div id="armor"></div></div>
+  <div id="bottom-right"><div id="ammo"><span id="ammo-mag">12</span><span id="ammo-reserve">/ 48</span></div><div id="weapon-name">P9</div><div id="money">$800</div></div>
+  <div id="hint"></div>
+  <div id="progress" hidden><div id="progress-label"></div><div id="progress-track"><div id="progress-bar"></div></div></div>
+  <div id="banner" hidden></div>
+  <div id="buy-menu" hidden><h2>Buy — Round <span id="buy-round">1</span></h2><div id="buy-money">Funds: $800</div><div id="buy-list"></div></div>
+  <div id="scoreboard" hidden><h2 id="board-title">Scoreboard</h2><table><thead><tr><th>Player</th><th>Team</th><th>K</th><th>D</th><th>DMG</th><th>$</th></tr></thead><tbody id="board-rows"></tbody></table></div>
+</div>
+
+<div id="overlay" class="overlay">
+  <section class="panel" role="dialog" aria-modal="true" aria-labelledby="overlay-title">
+    <h1 id="overlay-title">SOLSTICE <span>☀</span></h1>
+    <p>A sunlit hill town, two teams, one charge. Embers attack Depot (A) and Terrace (B); Sentinels hold them. Buy between rounds, plant or eliminate — first to 7 rounds takes the match.</p>
+    <button id="play" type="button">Click to play</button>
+    <ul class="keys">
+      <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move · <kbd>Mouse</kbd> Look · <kbd>Click</kbd> Fire</li>
+      <li><kbd>R</kbd> Reload · <kbd>E</kbd> Plant / defuse · <kbd>Ctrl</kbd> Crouch · <kbd>Space</kbd> Jump</li>
+      <li><kbd>G</kbd> Cook frag (release to throw) · <kbd>F</kbd> Flash · <kbd>Tab</kbd> Scoreboard</li>
+    </ul>
+  </section>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
+<script type="module" src="./src/game.js"></script>
+</body>
+</html>
